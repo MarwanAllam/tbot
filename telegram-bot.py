@@ -10,11 +10,10 @@ TOKEN = "8246108964:AAGTQI8zQl6rXqhLVG7_8NyFj4YqO35dMVg"
 DATA_FILE = "data.json"
 
 queues = {}          # أدوار الشاتات (القنوات)
-awaiting_input = {}  # لتخزين المرحلة الحالية من الأسئلة لكل شات (للمعلمة والحلقة)
+awaiting_input = {}  # لتخزين المرحلة الحالية من الأسئلة لكل شات أو مستخدم (للمعلمة والحلقة أو الربط/الفصل)
 
 # --- وظائف حفظ وتحميل البيانات ---
 
-# تحميل بيانات القنوات المربوطة
 try:
     with open(DATA_FILE, "r", encoding="utf-8") as f:
         user_channels = json.load(f)
@@ -37,8 +36,7 @@ def make_main_keyboard(chat_id):
         [
             InlineKeyboardButton("🗑️ ريموف", callback_data=f"remove_menu|{chat_id}"),
             InlineKeyboardButton("🔒 إنهاء الدور", callback_data=f"close|{chat_id}")
-        ]
-        ,
+        ],
         [
             InlineKeyboardButton("⭐ إدارة المشرفين", callback_data=f"manage_admins|{chat_id}")
         ]
@@ -56,59 +54,26 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """يعرض رسالة الترحيب والأوامر."""
     text = (
         "أهلاً 👋\nأنا بوت إدارة القنوات والدور.\n\n"
-        "🔗 استخدم **/link @اسم_القناة** لربط قناة.\n"
-        "🗑️ استخدم **/unlink @اسم_القناة** لفصل قناة.\n"
+        "🔗 استخدم **/link** لربط قناة.\n"
+        "🗑️ استخدم **/unlink** لفصل قناة.\n"
         "📜 استخدم **/mychannels** لعرض القنوات المربوطة.\n"
         "🎯 بعد ما تربط قناة، استخدم **/startrole** لتبدأ الدور في أي قناة مربوطة."
     )
     await update.message.reply_text(text, parse_mode="Markdown")
 
-async def link_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """لربط قناة بحساب المستخدم."""
+async def link_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """يبدأ عملية طلب اسم القناة للربط."""
     user_id = str(update.effective_user.id)
-    if not context.args:
-        await update.message.reply_text("اكتب اسم القناة: /link @اسم_القناة")
-        return
+    # استخدام user_id كمفتاح للانتظار في الدردشة الخاصة
+    awaiting_input[user_id] = {"step": "link_channel", "chat_id": update.effective_chat.id} 
+    await update.message.reply_text("🔗 **أرسل الآن اسم القناة** (مع @) التي تود ربطها:")
 
-    channel_username = context.args[0]
-    try:
-        channel = await context.bot.get_chat(channel_username)
-        bot_member = await context.bot.get_chat_member(channel.id, context.bot.id)
-        if bot_member.status not in ["administrator", "creator"]:
-            await update.message.reply_text("❌ البوت لازم يكون **أدمن** في القناة قبل الربط.")
-            return
-
-        if user_id not in user_channels:
-            user_channels[user_id] = []
-
-        if channel.id not in user_channels[user_id]:
-            user_channels[user_id].append(channel.id)
-            save_data()
-            await update.message.reply_text(f"✅ تم ربط القناة: **{channel.title}**")
-        else:
-            await update.message.reply_text("⚠️ القناة مربوطة بالفعل.")
-
-    except Exception as e:
-        await update.message.reply_text(f"❌ حصل خطأ: تأكد من أن البوت في القناة وأن اسمها صحيح. (الخطأ: {e})")
-
-async def unlink_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """لفصل قناة عن حساب المستخدم."""
+async def unlink_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """يبدأ عملية طلب اسم القناة للفصل."""
     user_id = str(update.effective_user.id)
-    if not context.args:
-        await update.message.reply_text("اكتب اسم القناة: /unlink @اسم_القناة")
-        return
+    awaiting_input[user_id] = {"step": "unlink_channel", "chat_id": update.effective_chat.id}
+    await update.message.reply_text("🗑️ **أرسل الآن اسم القناة** (مع @) التي تود فصلها:")
 
-    channel_username = context.args[0]
-    try:
-        channel = await context.bot.get_chat(channel_username)
-        if user_id in user_channels and channel.id in user_channels[user_id]:
-            user_channels[user_id].remove(channel.id)
-            save_data()
-            await update.message.reply_text(f"✅ فصلت القناة: **{channel.title}**")
-        else:
-            await update.message.reply_text("⚠️ القناة مش مربوطة بحسابك.")
-    except Exception as e:
-        await update.message.reply_text(f"❌ حصل خطأ: {e}")
 
 async def my_channels(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """لعرض القنوات المربوطة للمستخدم."""
@@ -131,7 +96,7 @@ async def start_role(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """يعرض قائمة بالقنوات المربوطة لاختيار القناة لبدء الدور فيها."""
     user_id = str(update.effective_user.id)
     if user_id not in user_channels or not user_channels[user_id]:
-        await update.message.reply_text("🚫 مفيش قنوات مربوطة. استخدم **/link @اسم_القناة** أول.")
+        await update.message.reply_text("🚫 مفيش قنوات مربوطة. استخدم **/link** أول.")
         return
 
     text = "اختر القناة لبدء الدور:\n"
@@ -150,7 +115,7 @@ async def start_role(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
 
 # ----------------------------------------
-#        2. منطق بدء الدور وجمع المعلومات
+#        2. منطق بدء الدور وجمع المعلومات / الربط والفصل
 # ----------------------------------------
 
 async def prompt_for_role(update: Update, context: ContextTypes.DEFAULT_TYPE, target_chat_id: int):
@@ -163,6 +128,7 @@ async def prompt_for_role(update: Update, context: ContextTypes.DEFAULT_TYPE, ta
         )
         return
 
+    # استخدام target_chat_id كمفتاح للانتظار لعملية بدء الدور
     awaiting_input[target_chat_id] = {
         "step": "teacher",
         "creator_id": update.effective_user.id,
@@ -176,25 +142,73 @@ async def prompt_for_role(update: Update, context: ContextTypes.DEFAULT_TYPE, ta
 
 
 async def collect_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """يجمع اسم المعلمة واسم الحلقة بعد أمر start_role."""
+    """يجمع اسم المعلمة/الحلقة أو اسم القناة للربط/الفصل."""
     
     if not update.message or not update.message.text:
         return
 
-    user_id = update.effective_user.id
+    user_id = str(update.effective_user.id)
     user_input = update.message.text.strip()
+
+    # 1. البحث عن حالة انتظار لعمليات الربط/الفصل (المفتاح هو user_id)
+    if user_id in awaiting_input and user_id == str(awaiting_input[user_id].get("creator_id", user_id)):
+        state = awaiting_input.pop(user_id) # إزالة الحالة فوراً لمنع التكرار
+        step = state["step"]
+        channel_username = user_input.split()[0] # نأخذ أول كلمة فقط للتأكد أنه اسم قناة
+
+        # --- معالجة الربط ---
+        if step == "link_channel":
+            try:
+                channel = await context.bot.get_chat(channel_username)
+                bot_member = await context.bot.get_chat_member(channel.id, context.bot.id)
+                
+                if bot_member.status not in ["administrator", "creator"]:
+                    await update.message.reply_text("❌ البوت لازم يكون **أدمن** في القناة قبل الربط.")
+                    return
+                
+                if user_id not in user_channels:
+                    user_channels[user_id] = []
+
+                if channel.id not in user_channels[user_id]:
+                    user_channels[user_id].append(channel.id)
+                    save_data()
+                    await update.message.reply_text(f"✅ تم ربط القناة: **{channel.title}**")
+                else:
+                    await update.message.reply_text("⚠️ القناة مربوطة بالفعل.")
+            except Exception as e:
+                await update.message.reply_text(f"❌ حصل خطأ. تأكد من إرسال اسم قناة صحيح (مع @) ومن كون البوت في القناة.")
+            return
+
+        # --- معالجة الفصل ---
+        elif step == "unlink_channel":
+            try:
+                channel = await context.bot.get_chat(channel_username)
+                if user_id in user_channels and channel.id in user_channels[user_id]:
+                    user_channels[user_id].remove(channel.id)
+                    save_data()
+                    await update.message.reply_text(f"✅ فصلت القناة: **{channel.title}**")
+                else:
+                    await update.message.reply_text("⚠️ القناة مش مربوطة بحسابك.")
+            except Exception as e:
+                await update.message.reply_text(f"❌ حصل خطأ. تأكد من إرسال اسم قناة صحيح (مع @).")
+            return
+
+
+    # 2. البحث عن حالة انتظار لعملية بدء الدور (المفتاح هو chat_id القناة)
     
+    # تحديد target_chat_id من مفاتيح awaiting_input التي ليست user_id
     target_chat_id = None
     for chat_id, data in awaiting_input.items():
-        if data.get("creator_id") == user_id:
+        # التأكد من أن المفتاح هو عدد صحيح (chat_id) وأن المستخدم هو من بدأ العملية
+        if isinstance(chat_id, int) and data.get("creator_id") == update.effective_user.id:
             target_chat_id = chat_id
             break
 
     if target_chat_id is None:
-        return
+        return # ليس هناك عملية انتظار قائمة لهذا المستخدم
 
     step = awaiting_input[target_chat_id]["step"]
-    
+
     if step == "teacher":
         awaiting_input[target_chat_id]["teacher"] = user_input
         awaiting_input[target_chat_id]["step"] = "class_name"
@@ -207,7 +221,7 @@ async def collect_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
         creator_name = awaiting_input[target_chat_id]["creator_name"]
 
         queues[target_chat_id] = {
-            "creator": user_id,
+            "creator": update.effective_user.id,
             "creator_name": creator_name,
             "admins": set(),
             "members": [],
@@ -239,6 +253,7 @@ async def collect_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ----------------------------------------
 #        3. معالجة الأزرار (Callback Queries)
 # ----------------------------------------
+# (هذه الدالة تبقى كما هي، تستخدم التعديلات لسرعة الاستجابة والإشعارات)
 
 async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -247,43 +262,48 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     parts = data.split("|")
     action = parts[0]
     
-    # 🚀 التعديل لزيادة السرعة: الرد فوراً على ضغطة الزر لإزالة علامة التحميل
-    await query.answer() 
-    
     # معالجة اختيار القناة للبدء فيها
     if action == "select_channel":
         target_chat_id = int(parts[1])
+        await query.answer(f"اخترت القناة. سيتم بدء إدخال البيانات.")
         await prompt_for_role(update, context, target_chat_id)
         return
         
     if len(parts) < 2:
+        await query.answer("❌ خطأ في بيانات الزر.")
         return
         
     chat_id = int(parts[1])
     q = queues.get(chat_id)
 
     if not q:
+        await query.answer("❌ مفيش دور شغال في هذه القناة.") 
         return
 
     
     if action == "join":
         if q["closed"]:
-            # يمكن إضافة إشعار بسيط هنا إذا أردت
+            await query.answer("🚫 التسجيل مقفول.") 
             return
 
         q["usernames"][user.id] = user.full_name
 
         if user.id in q["removed"]:
-            # يمكن إضافة إشعار بسيط هنا إذا أردت
+            await query.answer("🚫 تم حذفك من الدور. استنى الدور الجديد.")
             return
 
+        message = ""
         if user.id in q["members"]:
             q["members"].remove(user.id)
             if user.id in q["all_joined"]:
                 q["all_joined"].remove(user.id)
+            message = "❌ تم انسحابك."
         else:
             q["members"].append(user.id)
             q["all_joined"].add(user.id)
+            message = "✅ تم تسجيلك!"
+
+        await query.answer(message) 
 
         members_text = "\n".join(
             [f"{i+1}. {q['usernames'].get(uid, 'مجهول')}" for i, uid in enumerate(q["members"])]
@@ -298,9 +318,13 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif action == "remove_menu":
         if not is_admin_or_creator(user.id, q):
+            await query.answer("🚫 مش من صلاحياتك.")
             return
         if not q["members"]:
+            await query.answer("📋 مفيش حد في الدور.")
             return
+        
+        await query.answer()
 
         keyboard = []
         for i, uid in enumerate(q["members"]):
@@ -313,11 +337,14 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif action == "remove_member":
         if not is_admin_or_creator(user.id, q):
+            await query.answer("🚫 مش من صلاحياتك.")
             return
         index = int(parts[2])
         if 0 <= index < len(q["members"]):
             target = q["members"].pop(index)
             q["removed"].add(target)
+            
+        await query.answer("✅ تم حذف العضو.")
 
         members_text = "\n".join(
             [f"{i+1}. {q['usernames'].get(uid, 'مجهول')}" for i, uid in enumerate(q["members"])]
@@ -331,6 +358,8 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(text, reply_markup=make_main_keyboard(chat_id), parse_mode="Markdown")
 
     elif action == "cancel_remove":
+        await query.answer("تم الإلغاء ✅")
+        
         members_text = "\n".join(
             [f"{i+1}. {q['usernames'].get(uid, 'مجهول')}" for i, uid in enumerate(q["members"])]
         ) or "(فاضية)"
@@ -344,8 +373,11 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif action == "close":
         if not is_admin_or_creator(user.id, q):
+            await query.answer("🚫 مش من صلاحياتك.")
             return
         q["closed"] = True
+        
+        await query.answer("🔒 تم إنهاء الدور.")
 
         all_joined = list(q["all_joined"])
         removed = list(q["removed"])
@@ -382,12 +414,16 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif action == "manage_admins":
         if user.id != q["creator"]:
+            await query.answer("🚫 بس اللي بدأ الدور يقدر يدير المشرفين.")
             return
 
         members_to_manage = [uid for uid in q["all_joined"] if uid != q["creator"]]
 
         if not members_to_manage:
+            await query.answer("📋 مفيش حد يمكن تعيينه مشرفًا غيرك.")
             return
+            
+        await query.answer()
 
         keyboard = []
         for uid in members_to_manage:
@@ -401,12 +437,19 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif action == "toggle_admin":
         if user.id != q["creator"]:
+            await query.answer("🚫 بس اللي بدأ الدور يقدر يعمل كده.")
             return
         target_id = int(parts[2])
+        
+        message = ""
         if target_id in q["admins"]:
             q["admins"].remove(target_id)
+            message = "❌ تم إزالة الإشراف."
         else:
             q["admins"].add(target_id)
+            message = "⭐ تم تعيينه مشرفًا."
+            
+        await query.answer(message)
 
         members_to_manage = [uid for uid in q["all_joined"] if uid != q["creator"]]
         keyboard = []
@@ -434,8 +477,14 @@ async def force_close(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         closed_queue_message = f"⚠️ مفيش دور مفتوح حاليًا في هذه الدردشة ليتم حذفه."
 
+    # مسح أي حالة انتظار تخص الشات المحدد إذا كان مفتاحه هو chat_id
     if chat_id in awaiting_input:
         del awaiting_input[chat_id]
+    
+    # مسح أي حالة انتظار تخص المستخدم نفسه إذا كان يحاول الربط/الفصل
+    user_id_str = str(update.effective_user.id)
+    if user_id_str in awaiting_input:
+        del awaiting_input[user_id_str]
         
     await update.message.reply_text(
         closed_queue_message,
@@ -450,12 +499,12 @@ app = ApplicationBuilder().token(TOKEN).build()
 
 # أوامر الربط والإدارة (في الخاص)
 app.add_handler(CommandHandler("start", start))
-app.add_handler(CommandHandler("link", link_channel))
-app.add_handler(CommandHandler("unlink", unlink_channel))
+app.add_handler(CommandHandler("link", link_prompt)) # تم تغيير المعالج
+app.add_handler(CommandHandler("unlink", unlink_prompt)) # تم تغيير المعالج
 app.add_handler(CommandHandler("mychannels", my_channels))
 app.add_handler(CommandHandler("startrole", start_role))
 
-# معالجة النصوص (جمع اسم المعلمة والحلقة)
+# معالجة النصوص (جمع اسم المعلمة والحلقة و الربط/الفصل)
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, collect_info))
 
 # معالجة الأزرار (join, remove, close, select_channel)
