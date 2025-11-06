@@ -6,7 +6,7 @@ from telegram.ext import (
 )
 
 # --- الثوابت والمتغيرات العامة ---
-TOKEN = "8427063575:AAGyQSTbjGHOrBHhZeVucVnNWc47amwR7RA"
+TOKEN = "8246108964:AAGTQI8zQl6rXqhLVG7_8NyFj4YqO35dMVg"
 DATA_FILE = "data.json"
 
 queues = {}          # أدوار الشاتات (القنوات)
@@ -499,3 +499,4 @@ app.add_handler(CommandHandler("forceclose", force_close))
 
 print("🤖 البوت شغال...")
 app.run_polling()
+
