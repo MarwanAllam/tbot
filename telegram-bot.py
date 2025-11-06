@@ -37,7 +37,8 @@ def make_main_keyboard(chat_id):
         [
             InlineKeyboardButton("🗑️ ريموف", callback_data=f"remove_menu|{chat_id}"),
             InlineKeyboardButton("🔒 إنهاء الدور", callback_data=f"close|{chat_id}")
-        ],
+        ]
+        ,
         [
             InlineKeyboardButton("⭐ إدارة المشرفين", callback_data=f"manage_admins|{chat_id}")
         ]
@@ -71,15 +72,12 @@ async def link_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     channel_username = context.args[0]
     try:
-        # 1. جلب معلومات القناة
         channel = await context.bot.get_chat(channel_username)
-        # 2. التحقق من صلاحية البوت
         bot_member = await context.bot.get_chat_member(channel.id, context.bot.id)
         if bot_member.status not in ["administrator", "creator"]:
             await update.message.reply_text("❌ البوت لازم يكون **أدمن** في القناة قبل الربط.")
             return
 
-        # 3. حفظ القناة
         if user_id not in user_channels:
             user_channels[user_id] = []
 
@@ -123,7 +121,6 @@ async def my_channels(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for idx, ch_id in enumerate(user_channels[user_id], start=1):
         try:
             ch = await context.bot.get_chat(ch_id)
-            # التأكد من وجود username قبل عرضه
             username_display = f" (@{ch.username})" if ch.username else ""
             text += f"{idx}. **{ch.title}**{username_display}\n"
         except:
@@ -159,7 +156,6 @@ async def start_role(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def prompt_for_role(update: Update, context: ContextTypes.DEFAULT_TYPE, target_chat_id: int):
     """يبدأ عملية جمع المعلومات (المعلمة والحلقة) في القناة المختارة."""
     
-    # ✅ التحقق الحقيقي إن كان فيه دور شغال في هذه القناة
     if target_chat_id in queues and not queues[target_chat_id].get("closed", True):
         await context.bot.send_message(
             chat_id=update.effective_chat.id,
@@ -167,10 +163,9 @@ async def prompt_for_role(update: Update, context: ContextTypes.DEFAULT_TYPE, ta
         )
         return
 
-    # حفظ حالة انتظار الإدخال بالـ chat_id الصحيح
     awaiting_input[target_chat_id] = {
         "step": "teacher",
-        "creator_id": update.effective_user.id, # حفظ ID اللي بدأ العملية
+        "creator_id": update.effective_user.id,
         "creator_name": update.effective_user.full_name
     }
     
@@ -183,14 +178,12 @@ async def prompt_for_role(update: Update, context: ContextTypes.DEFAULT_TYPE, ta
 async def collect_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """يجمع اسم المعلمة واسم الحلقة بعد أمر start_role."""
     
-    # ✅ تأكد إن الرسالة نص مش زرار
     if not update.message or not update.message.text:
         return
 
     user_id = update.effective_user.id
     user_input = update.message.text.strip()
     
-    # البحث عن أي chat_id في awaiting_input يطابق creator_id الحالي
     target_chat_id = None
     for chat_id, data in awaiting_input.items():
         if data.get("creator_id") == user_id:
@@ -198,7 +191,6 @@ async def collect_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
             break
 
     if target_chat_id is None:
-        # قد يكون المستخدم يحاول يكتب نص غير أمر في الخاص بدون بدء عملية
         return
 
     step = awaiting_input[target_chat_id]["step"]
@@ -214,7 +206,6 @@ async def collect_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
         class_name = user_input
         creator_name = awaiting_input[target_chat_id]["creator_name"]
 
-        # إنشاء الدور في القناة المستهدفة
         queues[target_chat_id] = {
             "creator": user_id,
             "creator_name": creator_name,
@@ -228,7 +219,6 @@ async def collect_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "class_name": class_name
         }
 
-        # حذف حالة الانتظار
         del awaiting_input[target_chat_id]
 
         text = (
@@ -237,14 +227,12 @@ async def collect_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"🏫 *اسم الحلقة:* {class_name}\n\n"
             f"🎯 *القائمة الحالية:* (فاضية)"
         )
-        # إرسال رسالة الدور إلى القناة المستهدفة
         await context.bot.send_message(
             chat_id=target_chat_id,
             text=text,
             reply_markup=make_main_keyboard(target_chat_id),
             parse_mode="Markdown"
         )
-        # إشعار المستخدم بنجاح العملية
         await update.message.reply_text("✅ تم إنشاء الدور بنجاح في القناة!")
 
 
@@ -259,48 +247,43 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     parts = data.split("|")
     action = parts[0]
     
+    # 🚀 التعديل لزيادة السرعة: الرد فوراً على ضغطة الزر لإزالة علامة التحميل
+    await query.answer() 
+    
     # معالجة اختيار القناة للبدء فيها
     if action == "select_channel":
         target_chat_id = int(parts[1])
-        await query.answer(f"اخترت القناة. سيتم بدء إدخال البيانات.")
         await prompt_for_role(update, context, target_chat_id)
         return
         
-    # المعالجة الرئيسية لجميع أزرار الدور
     if len(parts) < 2:
-        await query.answer("❌ خطأ في بيانات الزر.")
         return
         
     chat_id = int(parts[1])
     q = queues.get(chat_id)
 
     if not q:
-        await query.answer("❌ مفيش دور شغال في هذه القناة.")
         return
 
-    # يتم هنا استخدام الكود الأصلي للدور بنفس المنطق (join, remove, close, ...)
-    # التعديل الوحيد هو استخدام query.edit_message_text لتحديث رسالة الدور في القناة
     
     if action == "join":
         if q["closed"]:
-            await query.answer("🚫 التسجيل مقفول.")
+            # يمكن إضافة إشعار بسيط هنا إذا أردت
             return
 
         q["usernames"][user.id] = user.full_name
 
         if user.id in q["removed"]:
-            await query.answer("🚫 تم حذفك من الدور. استنى الدور الجديد.")
+            # يمكن إضافة إشعار بسيط هنا إذا أردت
             return
 
         if user.id in q["members"]:
             q["members"].remove(user.id)
             if user.id in q["all_joined"]:
                 q["all_joined"].remove(user.id)
-            await query.answer("❌ تم انسحابك.")
         else:
             q["members"].append(user.id)
             q["all_joined"].add(user.id)
-            await query.answer("✅ تم تسجيلك!")
 
         members_text = "\n".join(
             [f"{i+1}. {q['usernames'].get(uid, 'مجهول')}" for i, uid in enumerate(q["members"])]
@@ -315,10 +298,8 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif action == "remove_menu":
         if not is_admin_or_creator(user.id, q):
-            await query.answer("🚫 مش من صلاحياتك.")
             return
         if not q["members"]:
-            await query.answer("📋 مفيش حد في الدور.")
             return
 
         keyboard = []
@@ -332,7 +313,6 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif action == "remove_member":
         if not is_admin_or_creator(user.id, q):
-            await query.answer("🚫 مش من صلاحياتك.")
             return
         index = int(parts[2])
         if 0 <= index < len(q["members"]):
@@ -361,11 +341,9 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"🎯 *القائمة الحالية:*\n{members_text}"
         )
         await query.edit_message_text(text, reply_markup=make_main_keyboard(chat_id), parse_mode="Markdown")
-        await query.answer("تم الإلغاء ✅")
 
     elif action == "close":
         if not is_admin_or_creator(user.id, q):
-            await query.answer("🚫 مش من صلاحياتك.")
             return
         q["closed"] = True
 
@@ -397,24 +375,18 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "🛑 *تم إنهاء الدور.*"
         )
 
-        # 🧹 حذف الدور بعد القفل
-        # يتم إرسال الرسالة النهائية كرسالة جديدة لأن الرسالة الأصلية سيتم حذفها/تعديلها
         await query.message.reply_text(final_text, parse_mode="Markdown")
-        # حذف رسالة الدور الأصلية بعد الإنهاء
         await query.delete_message()
         del queues[chat_id]
 
 
     elif action == "manage_admins":
         if user.id != q["creator"]:
-            await query.answer("🚫 بس اللي بدأ الدور يقدر يدير المشرفين.")
             return
 
-        # يجب أن يكون المستخدم ضمن الأعضاء ليكون مشرفاً
         members_to_manage = [uid for uid in q["all_joined"] if uid != q["creator"]]
 
         if not members_to_manage:
-            await query.answer("📋 مفيش حد يمكن تعيينه مشرفًا غيرك.")
             return
 
         keyboard = []
@@ -429,7 +401,6 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif action == "toggle_admin":
         if user.id != q["creator"]:
-            await query.answer("🚫 بس اللي بدأ الدور يقدر يعمل كده.")
             return
         target_id = int(parts[2])
         if target_id in q["admins"]:
@@ -437,7 +408,6 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             q["admins"].add(target_id)
 
-        # إعادة بناء لوحة المفاتيح
         members_to_manage = [uid for uid in q["all_joined"] if uid != q["creator"]]
         keyboard = []
         for uid in members_to_manage:
@@ -448,9 +418,6 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await query.edit_message_text("👮 *إدارة المشرفين:*",
                                       reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
-                                      
-    # بعد كل عملية زر، يتم مسح الإشعار (Answer the query)
-    await query.answer()
 
 # ----------------------------------------
 #        4. أمر الإغلاق الإجباري
@@ -499,4 +466,3 @@ app.add_handler(CommandHandler("forceclose", force_close))
 
 print("🤖 البوت شغال...")
 app.run_polling()
-
