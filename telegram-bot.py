@@ -10,7 +10,7 @@ TOKEN = "8246108964:AAGTQI8zQl6rXqhLVG7_8NyFj4YqO35dMVg"
 DATA_FILE = "data.json"
 
 queues = {}          # أدوار الشاتات (القنوات)
-awaiting_input = {}  # لتخزين المرحلة الحالية من الأسئلة لكل شات أو مستخدم (للمعلمة والحلقة أو الربط/الفصل)
+awaiting_input = {}  # لتخزين المرحلة الحالية من الأسئلة لكل شات أو مستخدم
 
 # --- وظائف حفظ وتحميل البيانات ---
 
@@ -64,7 +64,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def link_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """يبدأ عملية طلب اسم القناة للربط."""
     user_id = str(update.effective_user.id)
-    # استخدام user_id كمفتاح للانتظار في الدردشة الخاصة
     awaiting_input[user_id] = {"step": "link_channel", "chat_id": update.effective_chat.id} 
     await update.message.reply_text("🔗 **أرسل الآن اسم القناة** (مع @) التي تود ربطها:")
 
@@ -128,7 +127,6 @@ async def prompt_for_role(update: Update, context: ContextTypes.DEFAULT_TYPE, ta
         )
         return
 
-    # استخدام target_chat_id كمفتاح للانتظار لعملية بدء الدور
     awaiting_input[target_chat_id] = {
         "step": "teacher",
         "creator_id": update.effective_user.id,
@@ -152,11 +150,10 @@ async def collect_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # 1. البحث عن حالة انتظار لعمليات الربط/الفصل (المفتاح هو user_id)
     if user_id in awaiting_input and user_id == str(awaiting_input[user_id].get("creator_id", user_id)):
-        state = awaiting_input.pop(user_id) # إزالة الحالة فوراً لمنع التكرار
+        state = awaiting_input.pop(user_id)
         step = state["step"]
-        channel_username = user_input.split()[0] # نأخذ أول كلمة فقط للتأكد أنه اسم قناة
+        channel_username = user_input.split()[0]
 
-        # --- معالجة الربط ---
         if step == "link_channel":
             try:
                 channel = await context.bot.get_chat(channel_username)
@@ -175,11 +172,10 @@ async def collect_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await update.message.reply_text(f"✅ تم ربط القناة: **{channel.title}**")
                 else:
                     await update.message.reply_text("⚠️ القناة مربوطة بالفعل.")
-            except Exception as e:
+            except Exception:
                 await update.message.reply_text(f"❌ حصل خطأ. تأكد من إرسال اسم قناة صحيح (مع @) ومن كون البوت في القناة.")
             return
 
-        # --- معالجة الفصل ---
         elif step == "unlink_channel":
             try:
                 channel = await context.bot.get_chat(channel_username)
@@ -189,23 +185,21 @@ async def collect_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await update.message.reply_text(f"✅ فصلت القناة: **{channel.title}**")
                 else:
                     await update.message.reply_text("⚠️ القناة مش مربوطة بحسابك.")
-            except Exception as e:
+            except Exception:
                 await update.message.reply_text(f"❌ حصل خطأ. تأكد من إرسال اسم قناة صحيح (مع @).")
             return
 
 
     # 2. البحث عن حالة انتظار لعملية بدء الدور (المفتاح هو chat_id القناة)
     
-    # تحديد target_chat_id من مفاتيح awaiting_input التي ليست user_id
     target_chat_id = None
     for chat_id, data in awaiting_input.items():
-        # التأكد من أن المفتاح هو عدد صحيح (chat_id) وأن المستخدم هو من بدأ العملية
         if isinstance(chat_id, int) and data.get("creator_id") == update.effective_user.id:
             target_chat_id = chat_id
             break
 
     if target_chat_id is None:
-        return # ليس هناك عملية انتظار قائمة لهذا المستخدم
+        return
 
     step = awaiting_input[target_chat_id]["step"]
 
@@ -253,7 +247,6 @@ async def collect_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ----------------------------------------
 #        3. معالجة الأزرار (Callback Queries)
 # ----------------------------------------
-# (هذه الدالة تبقى كما هي، تستخدم التعديلات لسرعة الاستجابة والإشعارات)
 
 async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -262,12 +255,44 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     parts = data.split("|")
     action = parts[0]
     
-    # معالجة اختيار القناة للبدء فيها
     if action == "select_channel":
         target_chat_id = int(parts[1])
         await query.answer(f"اخترت القناة. سيتم بدء إدخال البيانات.")
         await prompt_for_role(update, context, target_chat_id)
         return
+    
+    # --- منطق الإغلاق الإجباري من الخاص ---
+    elif action == "forceclose_channel":
+        target_chat_id = int(parts[1])
+        
+        # 1. تنفيذ منطق التنظيف (Clean-up Logic)
+        closed_queue_message = ""
+        if target_chat_id in queues:
+            del queues[target_chat_id]
+            closed_queue_message = "✅ تم مسح الدور العالق من الذاكرة بنجاح."
+        else:
+            closed_queue_message = "⚠️ لم يكن هناك دور مفتوح في الذاكرة لهذه القناة."
+
+        if target_chat_id in awaiting_input:
+            del awaiting_input[target_chat_id]
+        
+        # 2. إرسال التأكيد للمستخدم
+        try:
+            ch = await context.bot.get_chat(target_chat_id)
+            title = ch.title
+        except:
+            title = "القناة المجهولة"
+            
+        await query.answer(closed_queue_message)
+        await query.edit_message_text(
+            f"🔒 **إغلاق إجباري مكتمل:**\n"
+            f"تم مسح بيانات الدور من الذاكرة لـ **{title}**.\n"
+            f"{closed_queue_message}",
+            parse_mode="Markdown"
+        )
+        return # إنهاء الدالة هنا
+
+    # ------------------------------------
         
     if len(parts) < 2:
         await query.answer("❌ خطأ في بيانات الزر.")
@@ -279,8 +304,13 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not q:
         await query.answer("❌ مفيش دور شغال في هذه القناة.") 
         return
-
     
+    # ... (بقية منطق الأزرار: join, remove_menu, remove_member, cancel_remove, close, manage_admins, toggle_admin)
+    # تبقى كما كانت في الكود السابق
+    
+    # *********************
+    # الكود المتبقي لدالة button
+    # *********************
     if action == "join":
         if q["closed"]:
             await query.answer("🚫 التسجيل مقفول.") 
@@ -462,27 +492,38 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("👮 *إدارة المشرفين:*",
                                       reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
+
 # ----------------------------------------
-#        4. أمر الإغلاق الإجباري
+#        4. أمر الإغلاق الإجباري (الموزع)
 # ----------------------------------------
 
-async def force_close(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """لقفل الدور إجباريًا (أي حد يستخدمه)."""
+async def force_close_in_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """المنطق القديم: يتم استدعاؤه عند إرسال /forceclose داخل المجموعة/القناة."""
     chat_id = update.effective_chat.id
+    user_id = update.effective_user.id
     user_name = update.effective_user.full_name
+    
+    # 1. التحقق من الصلاحيات
+    try:
+        member = await context.bot.get_chat_member(chat_id, user_id)
+        if member.status not in ["administrator", "creator"]:
+            await update.message.reply_text("🚫 يجب أن تكون مشرفًا في هذه القناة لاستخدام أمر `/forceclose`.")
+            return
+    except Exception:
+        await update.message.reply_text("❌ حدث خطأ أثناء التحقق من صلاحياتك.")
+        return
 
+    # 2. إغلاق الدور العالق ومسح البيانات
     if chat_id in queues:
         del queues[chat_id]
-        closed_queue_message = f"🚨 تم حذف الدور المفتوح في هذه الدردشة بواسطة **{user_name}** ✅"
+        closed_queue_message = f"🚨 تم حذف الدور العالق بنجاح بواسطة **{user_name}** ✅\nالآن يمكنك بدء دور جديد."
     else:
         closed_queue_message = f"⚠️ مفيش دور مفتوح حاليًا في هذه الدردشة ليتم حذفه."
 
-    # مسح أي حالة انتظار تخص الشات المحدد إذا كان مفتاحه هو chat_id
     if chat_id in awaiting_input:
         del awaiting_input[chat_id]
     
-    # مسح أي حالة انتظار تخص المستخدم نفسه إذا كان يحاول الربط/الفصل
-    user_id_str = str(update.effective_user.id)
+    user_id_str = str(user_id)
     if user_id_str in awaiting_input:
         del awaiting_input[user_id_str]
         
@@ -490,6 +531,40 @@ async def force_close(update: Update, context: ContextTypes.DEFAULT_TYPE):
         closed_queue_message,
         parse_mode="Markdown"
     )
+
+async def force_close_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """المنطق الجديد: يتم استدعاؤه عند إرسال /forceclose في الدردشة الخاصة."""
+    user_id = str(update.effective_user.id)
+    if user_id not in user_channels or not user_channels[user_id]:
+        await update.message.reply_text("🚫 مفيش قنوات مربوطة بحسابك عشان تختار منها. استخدم **/link** أولاً.")
+        return
+
+    text = "🔒 **اختر القناة التي تريد إغلاق الدور العالق فيها إجباريًا:**"
+    keyboard = []
+    
+    for ch_id in user_channels[user_id]:
+        try:
+            ch = await context.bot.get_chat(ch_id)
+            # إضافة علامة (شغال) للدور المفتوح حالياً
+            status = " (✅ دور مفتوح)" if ch_id in queues else ""
+            keyboard.append([InlineKeyboardButton(f"{ch.title}{status}", callback_data=f"forceclose_channel|{ch_id}")])
+        except:
+            continue
+    
+    if not keyboard:
+        await update.message.reply_text("⚠️ لم يتم العثور على أي قنوات متاحة.")
+        return
+
+    await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+
+
+async def force_close_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """الموزع: يحدد ما إذا كان الأمر في الخاص أم في المجموعة."""
+    if update.effective_chat.type == "private":
+        await force_close_prompt(update, context)
+    else:
+        await force_close_in_group(update, context)
+
 
 # ----------------------------------------
 #        5. إعداد التطبيق (Main)
@@ -499,19 +574,20 @@ app = ApplicationBuilder().token(TOKEN).build()
 
 # أوامر الربط والإدارة (في الخاص)
 app.add_handler(CommandHandler("start", start))
-app.add_handler(CommandHandler("link", link_prompt)) # تم تغيير المعالج
-app.add_handler(CommandHandler("unlink", unlink_prompt)) # تم تغيير المعالج
+app.add_handler(CommandHandler("link", link_prompt))
+app.add_handler(CommandHandler("unlink", unlink_prompt))
 app.add_handler(CommandHandler("mychannels", my_channels))
 app.add_handler(CommandHandler("startrole", start_role))
 
-# معالجة النصوص (جمع اسم المعلمة والحلقة و الربط/الفصل)
+# الأمر الموزع للإغلاق الإجباري
+app.add_handler(CommandHandler("forceclose", force_close_command))
+
+# معالجة النصوص
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, collect_info))
 
-# معالجة الأزرار (join, remove, close, select_channel)
+# معالجة الأزرار
 app.add_handler(CallbackQueryHandler(button))
 
-# أمر الإغلاق الإجباري (يستخدم داخل الدردشة/القناة)
-app.add_handler(CommandHandler("forceclose", force_close))
 
 print("🤖 البوت شغال...")
 app.run_polling()
