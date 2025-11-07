@@ -9,14 +9,19 @@ from telegram.ext import (
 TOKEN = "8246108964:AAGTQI8zQl6rXqhLVG7_8NyFj4YqO35dMVg"
 DATA_FILE = "data.json"
 
-queues = {}          # أدوار الشاتات (القنوات)
-awaiting_input = {}  # لتخزين المرحلة الحالية من الأسئلة لكل شات أو مستخدم
+# الأدوار النشطة حالياً (Key: chat_id)
+queues = {}          
+# حالات انتظار الإدخال (Key: user_id للربط/الفصل، Key: chat_id لبدء الدور)
+awaiting_input = {}  
 
 # --- وظائف حفظ وتحميل البيانات ---
 
 try:
     with open(DATA_FILE, "r", encoding="utf-8") as f:
+        # User_channels يكون مفتاحه user_id (str) والقيمة قائمة بـ chat_ids (int)
         user_channels = json.load(f)
+        # تحويل مفاتيح القنوات إلى أعداد صحيحة لتطابق النوع في Python
+        user_channels = {k: [int(cid) for cid in v] if isinstance(v, list) else v for k, v in user_channels.items()}
 except FileNotFoundError:
     user_channels = {}
 
@@ -64,13 +69,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def link_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """يبدأ عملية طلب اسم القناة للربط."""
     user_id = str(update.effective_user.id)
-    awaiting_input[user_id] = {"step": "link_channel", "chat_id": update.effective_chat.id} 
+    awaiting_input[user_id] = {"step": "link_channel", "chat_id": update.effective_chat.id, "creator_id": update.effective_user.id} 
     await update.message.reply_text("🔗 **أرسل الآن اسم القناة** (مع @) التي تود ربطها:")
 
 async def unlink_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """يبدأ عملية طلب اسم القناة للفصل."""
     user_id = str(update.effective_user.id)
-    awaiting_input[user_id] = {"step": "unlink_channel", "chat_id": update.effective_chat.id}
+    awaiting_input[user_id] = {"step": "unlink_channel", "chat_id": update.effective_chat.id, "creator_id": update.effective_user.id}
     await update.message.reply_text("🗑️ **أرسل الآن اسم القناة** (مع @) التي تود فصلها:")
 
 
@@ -120,17 +125,20 @@ async def start_role(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def prompt_for_role(update: Update, context: ContextTypes.DEFAULT_TYPE, target_chat_id: int):
     """يبدأ عملية جمع المعلومات (المعلمة والحلقة) في القناة المختارة."""
     
+    # التحقق من وجود دور مفتوح بالفعل
     if target_chat_id in queues and not queues[target_chat_id].get("closed", True):
         await context.bot.send_message(
-            chat_id=update.effective_chat.id,
+            chat_id=update.effective_chat.id, 
             text="⚠️ فيه دور شغال بالفعل في هذه القناة، قم بإنهاءه أولاً."
         )
         return
 
-    awaiting_input[target_chat_id] = {
+    # إعداد حالة الانتظار باستخدام ID القناة كمفتاح فريد (وهو عدد صحيح)
+    awaiting_input[target_chat_id] = { 
         "step": "teacher",
         "creator_id": update.effective_user.id,
-        "creator_name": update.effective_user.full_name
+        "creator_name": update.effective_user.full_name,
+        "private_chat_id": update.effective_chat.id 
     }
     
     await context.bot.send_message(
@@ -148,12 +156,14 @@ async def collect_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
     user_input = update.message.text.strip()
 
-    # 1. البحث عن حالة انتظار لعمليات الربط/الفصل (المفتاح هو user_id)
-    if user_id in awaiting_input and user_id == str(awaiting_input[user_id].get("creator_id", user_id)):
-        state = awaiting_input.pop(user_id)
+    # 1. البحث عن حالة انتظار لعمليات الربط/الفصل (المفتاح هو user_id - سترينج)
+    # نستخدم user_id كمفتاح للحالة لأن الإدخال يتم في الدردشة الخاصة
+    if user_id in awaiting_input and awaiting_input[user_id].get("creator_id") == update.effective_user.id:
+        state = awaiting_input.pop(user_id) 
         step = state["step"]
         channel_username = user_input.split()[0]
 
+        # --- معالجة الربط ---
         if step == "link_channel":
             try:
                 channel = await context.bot.get_chat(channel_username)
@@ -176,6 +186,7 @@ async def collect_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text(f"❌ حصل خطأ. تأكد من إرسال اسم قناة صحيح (مع @) ومن كون البوت في القناة.")
             return
 
+        # --- معالجة الفصل ---
         elif step == "unlink_channel":
             try:
                 channel = await context.bot.get_chat(channel_username)
@@ -190,10 +201,11 @@ async def collect_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
 
-    # 2. البحث عن حالة انتظار لعملية بدء الدور (المفتاح هو chat_id القناة)
+    # 2. البحث عن حالة انتظار لعملية بدء الدور (المفتاح هو chat_id القناة - عدد صحيح)
     
     target_chat_id = None
     for chat_id, data in awaiting_input.items():
+        # **التعديل هنا:** نتحقق من أن المفتاح رقمي (int) وأن creator_id يطابق المستخدم
         if isinstance(chat_id, int) and data.get("creator_id") == update.effective_user.id:
             target_chat_id = chat_id
             break
@@ -290,7 +302,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"{closed_queue_message}",
             parse_mode="Markdown"
         )
-        return # إنهاء الدالة هنا
+        return
 
     # ------------------------------------
         
@@ -305,11 +317,8 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer("❌ مفيش دور شغال في هذه القناة.") 
         return
     
-    # ... (بقية منطق الأزرار: join, remove_menu, remove_member, cancel_remove, close, manage_admins, toggle_admin)
-    # تبقى كما كانت في الكود السابق
-    
     # *********************
-    # الكود المتبقي لدالة button
+    # بقية منطق الأزرار
     # *********************
     if action == "join":
         if q["closed"]:
@@ -498,12 +507,11 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ----------------------------------------
 
 async def force_close_in_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """المنطق القديم: يتم استدعاؤه عند إرسال /forceclose داخل المجموعة/القناة."""
+    """المنطق عند إرسال /forceclose داخل المجموعة/القناة."""
     chat_id = update.effective_chat.id
     user_id = update.effective_user.id
     user_name = update.effective_user.full_name
     
-    # 1. التحقق من الصلاحيات
     try:
         member = await context.bot.get_chat_member(chat_id, user_id)
         if member.status not in ["administrator", "creator"]:
@@ -513,7 +521,6 @@ async def force_close_in_group(update: Update, context: ContextTypes.DEFAULT_TYP
         await update.message.reply_text("❌ حدث خطأ أثناء التحقق من صلاحياتك.")
         return
 
-    # 2. إغلاق الدور العالق ومسح البيانات
     if chat_id in queues:
         del queues[chat_id]
         closed_queue_message = f"🚨 تم حذف الدور العالق بنجاح بواسطة **{user_name}** ✅\nالآن يمكنك بدء دور جديد."
@@ -533,8 +540,9 @@ async def force_close_in_group(update: Update, context: ContextTypes.DEFAULT_TYP
     )
 
 async def force_close_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """المنطق الجديد: يتم استدعاؤه عند إرسال /forceclose في الدردشة الخاصة."""
+    """المنطق عند إرسال /forceclose في الدردشة الخاصة (لعرض الأدوار المفتوحة)."""
     user_id = str(update.effective_user.id)
+    
     if user_id not in user_channels or not user_channels[user_id]:
         await update.message.reply_text("🚫 مفيش قنوات مربوطة بحسابك عشان تختار منها. استخدم **/link** أولاً.")
         return
@@ -542,17 +550,26 @@ async def force_close_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE)
     text = "🔒 **اختر القناة التي تريد إغلاق الدور العالق فيها إجباريًا:**"
     keyboard = []
     
-    for ch_id in user_channels[user_id]:
-        try:
-            ch = await context.bot.get_chat(ch_id)
-            # إضافة علامة (شغال) للدور المفتوح حالياً
-            status = " (✅ دور مفتوح)" if ch_id in queues else ""
-            keyboard.append([InlineKeyboardButton(f"{ch.title}{status}", callback_data=f"forceclose_channel|{ch_id}")])
-        except:
-            continue
+    active_queues_for_user = [] 
     
-    if not keyboard:
-        await update.message.reply_text("⚠️ لم يتم العثور على أي قنوات متاحة.")
+    # المرور على القنوات المربوطة والتحقق من وجود دور فعال (مفتاحها في queues)
+    for ch_id in user_channels[user_id]:
+        if ch_id in queues: 
+            try:
+                ch = await context.bot.get_chat(ch_id)
+                active_queues_for_user.append((ch_id, ch.title))
+                
+                keyboard.append([
+                    InlineKeyboardButton(
+                        f"✅ {ch.title} (المعلمة: {queues[ch_id]['teacher_name']})", 
+                        callback_data=f"forceclose_channel|{ch_id}"
+                    )
+                ])
+            except Exception:
+                continue
+    
+    if not active_queues_for_user:
+        await update.message.reply_text("🎉 **لا توجد أدوار فعالة حاليًا** في أي من قنواتك المربوطة.")
         return
 
     await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
@@ -563,7 +580,9 @@ async def force_close_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     if update.effective_chat.type == "private":
         await force_close_prompt(update, context)
     else:
-        await force_close_in_group(update, context)
+        # إرسال الرسالة الترحيبية مباشرةً لتجنب إرسالها لجميع المشتركين
+        if update.effective_chat.type in ["channel", "supergroup", "group"]:
+            await force_close_in_group(update, context)
 
 
 # ----------------------------------------
